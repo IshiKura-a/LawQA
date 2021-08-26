@@ -152,7 +152,7 @@ def validate(tokenizer, model, device, loader, summary_len, beam_size):
                 length_penalty = 1.0
                 )
 
-            preds = [tokenizer.decode(g) for g in generated_ids]
+            preds = [tokenizer.decode(g, skip_special_tokens=True).replace(' ', '') for g in generated_ids]
             if iter % 100 == 0:
                 print(f'\nCompleted {iter}')
                 sys.stdout.flush()
