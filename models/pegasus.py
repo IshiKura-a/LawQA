@@ -135,8 +135,8 @@ def validate(tokenizer, model, device, loader, summary_len, beam_size):
     actuals = []
     with torch.no_grad():
         for iter, data in enumerate(tqdm(loader)):
-            y = data['question_ids'].to(device, dtype = torch.long)
-            ids = data['answer_ids'].to(device, dtype = torch.long)
+            y = data['answer_ids'].to(device, dtype = torch.long)
+            ids = data['question_ids'].to(device, dtype = torch.long)
             mask = data['question_mask'].to(device, dtype = torch.long)
             target = data['question_text']
 
