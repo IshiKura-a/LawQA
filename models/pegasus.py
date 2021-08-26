@@ -34,15 +34,17 @@ class T5PegasusTokenizer(BertTokenizer):
 
 
 def load_model(tokenizer_path, model_path):
+    print('tokenizer path:', tokenizer_path)
+    print('model path:', model_path)
     tokenizer = T5PegasusTokenizer.from_pretrained(tokenizer_path)
     model = MT5ForConditionalGeneration.from_pretrained(model_path)
     # test example
-    text = '蓝蓝的天上有一朵__白白__的云'
+    text = '蓝蓝的天上有一朵白白的云'
     ids = tokenizer.encode(text, return_tensors='pt')
     print(ids)
     text = tokenizer.decode(ids[0], skip_special_tokens=True)
     print(text)
-    text = tokenizer.decode(ids[0], skip_special_tokens=False).replace('[UNK] [UNK]', '__')
+    text = tokenizer.decode(ids[0], skip_special_tokens=False)
     print(text)
     model.eval()
     output = model.generate(ids,
@@ -57,7 +59,11 @@ def load_model(tokenizer_path, model_path):
 def load_dataset(path):
     dataset = []
     with codecs.open(path, mode='r', encoding='utf-8') as f:
-        data_f = json.load(f)
+        for line in f.readlines():
+            data_f = json.loads(line)
+            if len(data_f['answers']) <= 0: continue
+            dataset.append((data_f['question'], data_f['answers'][0]))
+        '''
         for item in data_f.values():
             trial_text = item["trial_text"].split("\n")
             trial_dialogue_orig = [utter.split("\t")[-1] for utter in trial_text]
@@ -66,7 +72,7 @@ def load_dataset(path):
                 trial_dialogue += "".join(utter.split())
             factfinding_text = "".join(item["factfinding_text"].split())
             dataset.append((trial_dialogue, factfinding_text, item["factfinding_text"]))
-    
+        '''
     return dataset
 
 
@@ -82,35 +88,34 @@ class CustomDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, index):
-        ctext = self.data[index][0]
-        text = self.data[index][1]
-        text_seg = self.data[index][2]
+        question_text = self.data[index][0]
+        answer_text = self.data[index][1]
 
-        source = self.tokenizer.batch_encode_plus([ctext], max_length= self.source_len, padding='max_length',return_tensors='pt', truncation=True)
-        target = self.tokenizer.batch_encode_plus([text], max_length= self.summ_len, padding='max_length',return_tensors='pt', truncation=True)
+        question = self.tokenizer.batch_encode_plus([question_text], max_length= self.source_len, padding='max_length',return_tensors='pt', truncation=True)
+        answer = self.tokenizer.batch_encode_plus([answer_text], max_length= self.summ_len, padding='max_length',return_tensors='pt', truncation=True)
 
-        source_ids = source['input_ids'].squeeze()
-        source_mask = source['attention_mask'].squeeze()
-        target_ids = target['input_ids'].squeeze()
-        target_mask = target['attention_mask'].squeeze()
+        question_ids = question['input_ids'].squeeze()
+        question_mask = question['attention_mask'].squeeze()
+        answer_ids = answer['input_ids'].squeeze()
+        answer_mask = answer['attention_mask'].squeeze()
 
         return {
-            'source_ids': source_ids.to(dtype=torch.long), 
-            'source_mask': source_mask.to(dtype=torch.long), 
-            'target_ids': target_ids.to(dtype=torch.long),
-            'target_ids_y': target_ids.to(dtype=torch.long), 
-            'source_text': ctext,
-            'abstract_text': text,
-            'abstract_seg_text': text_seg
+            'question_ids': question_ids.to(dtype=torch.long), 
+            'question_mask': question_mask.to(dtype=torch.long), 
+            'answer_ids': answer_ids.to(dtype=torch.long),
+            'answer_mask': answer_mask.to(dtype=torch.long),
+            'answer_ids_y': answer_ids.to(dtype=torch.long), 
+            'question_text': question_text,
+            'answer_text': answer_text
         }
 
 
 def train(epoch, tokenizer, model, device, loader, optimizer):
     model.train()
     for iter, data in enumerate(tqdm(loader)):
-        y = data['target_ids'].to(device, dtype = torch.long)
-        ids = data['source_ids'].to(device, dtype = torch.long)
-        mask = data['source_mask'].to(device, dtype = torch.long)
+        y = data['answer_ids'].to(device, dtype = torch.long)
+        ids = data['question_ids'].to(device, dtype = torch.long)
+        mask = data['question_mask'].to(device, dtype = torch.long)
 
         outputs = model(input_ids = ids, attention_mask = mask, labels=y)
         loss = outputs[0]
@@ -133,7 +138,7 @@ def validate(tokenizer, model, device, loader, summary_len, beam_size):
             y = data['target_ids'].to(device, dtype = torch.long)
             ids = data['source_ids'].to(device, dtype = torch.long)
             mask = data['source_mask'].to(device, dtype = torch.long)
-            target = data['abstract_seg_text']
+            target = data['question_text']
 
             generated_ids = model.generate(
                 input_ids = ids,
@@ -147,9 +152,7 @@ def validate(tokenizer, model, device, loader, summary_len, beam_size):
                 length_penalty = 1.0
                 )
 
-            preds = [tokenizer.decode(g[1:]).replace('[UNK] [UNK] 被告 [UNK] [UNK]', '__被告__')
-            .replace('[UNK] [UNK] 原告 [UNK] [UNK]', '__原告__')
-            .replace('[SEP]', '').replace('[PAD]', '').replace('[UNK]', '').strip() for g in generated_ids]
+            preds = [tokenizer.decode(g) for g in generated_ids]
             if iter % 100 == 0:
                 print(f'\nCompleted {iter}')
                 sys.stdout.flush()
@@ -172,7 +175,7 @@ parser.add_argument("--max_len", type=int, default=800, help="Article maximum le
 parser.add_argument("--summary_len", type=int, default=300, help="Summary length.")
 parser.add_argument("--output", type=str, default="./results/pegasus/predictions.txt", help="Decode abstract summary file path.")
 parser.add_argument("--reference", type=str, default="./results/pegasus/references.txt", help="Reference summary file path.")
-parser.add_argument("--save_path", type=str, default="./saved/pegasus-missing/")
+parser.add_argument("--save_path", type=str, default="./saved/pegasus/")
 parser.add_argument("--mode", type=str, choices=["train", "evaluate"], default="train", help="Train mode or evaluate mode.")
 parser.add_argument("--beam_size", type=int, default=5, help="Beam size for decoding.")
 parser.add_argument("--early_stop_num", type=int, default=10, help="Early stop number.")
@@ -185,6 +188,9 @@ rouge = Rouge()
 train_dataset = load_dataset(args.train_data)
 val_dataset = load_dataset(args.dev_data)
 test_dataset = load_dataset(args.test_data)
+print(f"train dataset size: {len(train_dataset)}")
+print(f"dev dataset size: {len(val_dataset)}")
+print(f"test dataset size: {len(test_dataset)}")
 
 # Creating the Training and Validation dataset for further creation of Dataloader
 training_set = CustomDataset(train_dataset, tokenizer, args.max_len, args.summary_len)
