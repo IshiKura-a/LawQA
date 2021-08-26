@@ -138,7 +138,7 @@ def validate(tokenizer, model, device, loader, summary_len, beam_size):
             y = data['answer_ids'].to(device, dtype = torch.long)
             ids = data['question_ids'].to(device, dtype = torch.long)
             mask = data['question_mask'].to(device, dtype = torch.long)
-            target = data['question_text']
+            target = data['answer_text']
 
             generated_ids = model.generate(
                 input_ids = ids,
